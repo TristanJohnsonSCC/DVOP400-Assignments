@@ -1,67 +1,93 @@
+# Name of the GitHub Actions workflow
 name: Build & Deploy to AKS
 
+# Trigger: run this workflow whenever code is pushed to the "main" branch
 on:
   push:
     branches: [ main ]
 
 jobs:
+  # First job: build the Docker image and push it to Docker Hub
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest   # Use the latest Ubuntu runner
+
+    # Expose the built image tag so the next job can use it
     outputs:
       image: ${{ steps.set-image.outputs.image }}
+
     steps:
+      # Step 1: Checkout the repository code so the runner has access to it
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Step 2: Enable Docker Buildx (required for multi-platform builds)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      # Step 3: Log in to Docker Hub using credentials stored in GitHub Secrets
       - name: Login to DockerHub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # Step 4: Build and push a multi-platform Docker image to Docker Hub
       - name: Build and push multi-platform image
         id: build
         uses: docker/build-push-action@v4
         with:
-          context: .
-          push: true
+          context: .   # Build context is the root of the repo
+          push: true   # Push the image to Docker Hub after building
           tags: ${{ secrets.DOCKER_USERNAME }}/dvop400-app:latest
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64  # Build for both architectures
 
+      # Step 5: Save the image tag as an output for the next job
       - name: Set output image
         id: set-image
         run: echo "::set-output name=image::${{ secrets.DOCKER_USERNAME }}/dvop400-app:latest"
 
+  # Second job: deploy the newly built image to Azure Kubernetes Service (AKS)
   deploy-aks:
-    needs: build-and-push
+    needs: build-and-push   # This job waits for the build job to finish
     runs-on: ubuntu-latest
+
     steps:
+      # Step 1: Checkout the repo again to access Kubernetes manifests
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Step 2: Install kubectl on the runner
       - name: Set up kubectl
         uses: azure/setup-kubectl@v3
 
+      # Step 3: Log in to Azure using a service principal stored in secrets
       - name: Azure login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # Step 4: Retrieve AKS cluster credentials so kubectl can connect to it
       - name: Get AKS credentials
         uses: azure/aks-set-context@v2
         with:
           resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
           cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
 
+      # Step 5: Deploy the app to AKS
       - name: Deploy app to AKS
         run: |
+          # Apply the Kubernetes deployment manifest
           kubectl apply -f k8s/deployment.yaml
+
+          # Update the deployment's container image to the newly built image
           kubectl set image deployment/dvop400-app dvop400-app=${{ secrets.DOCKER_USERNAME }}/dvop400-app:latest
+
+          # Restart the deployment to force pods to pull the new image
           kubectl rollout restart deployment/dvop400-app
+
+          # Wait for the rollout to complete successfully
           kubectl rollout status deployment/dvop400-app
 
+      # Step 6: Display service details (including external IP)
       - name: Show service details
         run: kubectl get svc dvop400-service -o wide
