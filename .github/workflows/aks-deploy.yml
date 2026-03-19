@@ -60,6 +60,7 @@ jobs:
         run: |
           kubectl apply -f k8s/deployment.yaml
           kubectl set image deployment/dvop400-app dvop400-app=${{ secrets.DOCKER_USERNAME }}/dvop400-app:latest
+          kubectl rollout restart deployment/dvop400-app
           kubectl rollout status deployment/dvop400-app
 
       - name: Show service details
